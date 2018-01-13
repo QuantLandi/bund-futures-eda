@@ -17,6 +17,7 @@ to buy or sell some given underlying product at a certain date.
 ```
 git clone https://github.com/QuantLandi/bund-futures-eda.git
 cd bund-futures-eda
+your-browser bund-futures-eda.html
 ```
 
 # Data source
