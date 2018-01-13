@@ -1,0 +1,946 @@
+---
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true  
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true 
+---
+Euro-Bund Futures Exploratory Data Analysis by Alessandro Landi
+========================================================
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# Load all of the packages that you end up using in your analysis in this code
+# chunk.
+
+# Notice that the parameter "echo" was set to FALSE for this code chunk. This
+# prevents the code from displaying in the knitted HTML output. You should set
+# echo=FALSE for all code chunks in your file, unless it makes sense for your
+# report to show the code that generated a particular plot.
+
+# The other parameters for "message" and "warning" should also be set to FALSE
+# for other code chunks once you have verified that each plot comes out as you
+# want it to. This will clean up the flow of your report.
+
+library(ggplot2)
+library(reshape2)
+library(plotly)
+library(dplyr)
+```
+
+```{r echo=FALSE, Load_the_Data}
+# Load the Data
+data <- read.csv('bund5min.csv',
+                 row.names = 1)
+```
+
+This dataset is a financial time series of Bund futures, i.e. the futures 
+contract on the 10yr bond issued by the German government. A futures contract is
+the commitment to buy or sell some given underlying product at a certain date.
+
+The dataset starts on 12th May 2016 and ends on 29th Sep 2017. It is a subset of
+a proprietary dataset belonging to the independent quantitative trading 
+research project FQT Research, whose owners kindly agreed to be used for the 
+scope of this project. It contains a few missing dates due to some server-side
+connection issues in some occasional circumstance.
+
+Each row is a snapshot taken every 5 minutes of:
+
+- the bid price
+- the ask price
+- the daily cumulative bid volume
+- the daily cumulative ask volume
+- the cumulative bid volume of the trades larger than 100 contracts
+- the cumulative ask volume of the trades larger than 100 contracts
+
+Some notes for the sake of clarification:
+
+- the bid price is the price at which a market participant sells a financial 
+security
+- the ask price is the price at which a market participant buys a financial 
+security
+- the bid price is usually lower and never higher than the ask price and the ask
+price is usually higher and never lower than the bid price, because the brokers 
+earn from the spread, therefore when we buy we buy higher and when sell we sell 
+lower
+- the bid volume is the number of contracts that were traded by the initiative 
+of a seller who met the offer a buyer
+- the ask volume is the number of contracts that were traded by the initiative 
+of a buyer who met the offer a seller 
+
+The dataset 
+
+```{r echo=FALSE}
+cat('Summary of the entire dataset:\n\n')
+summary(data[complete.cases(data),])
+```
+
+About this particular dataset, it is key to understand that, for the sake of our
+analysis, bid and ask are uniquely used to compute the mid price by averaging
+them. Then, we are not even so much interested in the mid price itself, but 
+rather in its first derivative with respect to a change in time, which we compute
+below. The reason is that we are more interested in the change in price rather
+than in the price itself.
+
+All other values are cumulative volume values. Therefore, they represent a 
+snapshot of the cumulative value at each time of the day. For the limited scope
+of this specific, we have chosen to not investigate the differences between bid 
+volume and ask volume. We have chosen to just focus on the overall volume by 
+simply summing the two. Again, we are not interested in the volume data per se 
+but rather in its first derivative with respect to a change in time.
+
+We have chosen limit the focus of our analysis to the following three key
+features:
+
+- volatility (change in price)
+- liquidity (change in volume)
+- proportion of large trades vs. overall trades (change in trades whose size is 
+larger than 99 over change in overall volume)
+
+More detail on their computation will be provided below.
+
+# Univariate Plots Section
+
+```{r echo=FALSE, Univariate_Plots}
+data$mid <- (data$bid + data$ask) / 2
+data$totalv <- data$bidv + data$askv
+data$hundreds_totalv <- data$hundreds_bidv + data$hundreds_askv
+subset_cols <- c('mid', 'totalv', 'hundreds_totalv')
+diffs <- apply(data[,subset_cols], 2, diff)
+diffs <- diffs[complete.cases(diffs),]
+diffs <- data.frame(diffs)
+
+cat('Summary of changes in price over 5-min intervals (in absolute value):\n\n')
+sapply(summary(abs(diffs$mid)), round, 2)
+```
+
+In order to measure the volatility of the price, we computed the differentials 
+between the price at time t and the price a time t + 5 minutes. Then we took the 
+absolute value of the differentials we cause in this case we are more interested 
+in how much the price moved rather than its direction. We can see that the range 
+is very wide, ranging from 0 to 0.95.
+
+```{r echo=FALSE}
+usual_mid <- abs(diffs$mid)[abs(diffs$mid) < quantile(abs(diffs$mid), .99)]
+cat('Summary of changes in price over 5-min intervals (in absolute value)\
+below 99th centile:\n\n')
+summary(usual_mid)
+```
+
+This is the same summary but here, for the sake of better insight of what
+happens in the usual case, we removed all data points beyond the 99th centile.
+From here we can see that in 99% of the cases the price oscillation is between 0
+and 0.115. This implies that occasionally there are some exceptionally large
+outliers between 0.115 and 0.95.
+
+```{r echo=FALSE}
+cat('Summary of changes in total volume over 5-min intervals:\n\n')
+summary(diffs$totalv)
+```
+
+This summary gives an idea of the 5-min liquidity. By liquidity we mean the 
+number of contracts traded among market participants. We can see that again the
+range of values is quite wide and goes from 0 to 79099.
+
+```{r echo=FALSE}
+usual_totalv <- diffs$totalv[diffs$totalv < quantile(diffs$totalv, .99)]
+cat('Summary of changes in total volume over 5-min intervals
+below 99th centile:\n\n')
+summary(usual_totalv)
+```
+
+As we did for the volatility summary, again for the sake of better insight 
+of what happens in the usual case, we removed all data points beyond the 99th
+centile. From here we can see that in 99% of the cases the number of traded 
+contracts  is between 0 and 16421. This implies that occasionally there are some
+exceptionally large outliers, like we saw when we measured the volatility.
+
+```{r echo=FALSE}
+cat('Summary of changes in total volume greater than 99 contracts
+over 5-min intervals:\n\n')
+summary(diffs$hundreds_totalv)
+```
+
+Here we are measuring the number of traded contracts whose minimum trade size 
+was greater than 99. It is worth to point out at each trade has a trade size and 
+a market participant can choose to trade either one contract at time or many 
+contracts at once. Only large traders such as banks, hedge funds or 
+exceptionally wealthy individuals have the capacity to trade more than one 
+hundred contracts at once. Therefore, this reveals the presence of large 
+traders. However, it is not sufficient to reveal the extent of their presence,
+as nothing prevents these traders to trade small quantities as well. 
+Nonetheless, it is a measure of the lower bound of such extent.
+
+```{r echo=FALSE}
+usual_hundreds_totalv <- 
+  diffs$hundreds_totalv[diffs$hundreds_totalv
+                        < quantile(diffs$hundreds_totalv, .99)]
+
+cat('Summary of changes in total volume greater than 99 contracts
+over 5-min intervals, below 99th centile:\n\n')
+summary(usual_hundreds_totalv)
+```
+
+Same as above, again for the sake of better insight of what happens in the 
+usual case, we removed all data points beyond the 99th centile. From here we can
+see that in 99% of the cases the number of traded contracts is between 0 and 
+6408 This implies that occasionally there are some exceptionally large outliers,
+like we saw when analyzing previous variables as well.
+
+```{r echo=FALSE, warning=FALSE}
+upper_bound <- quantile(diffs$totalv, .99)
+
+ggplot(aes(x = totalv),
+      data = diffs,
+      xlab = 'change in volume',
+      ylab = 'frequency of change in volume') +
+  scale_x_continuous(breaks = seq(0, upper_bound, 2000),
+                     limits = c(0, upper_bound)) +
+  geom_histogram(colour = 'black', 
+                 fill = 'pink',
+                 binwidth = 200) +
+  geom_vline(xintercept = median(diffs$totalv), colour='blue') +
+  geom_vline(xintercept = quantile(diffs$totalv, .1),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .25),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .75),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .9),
+             colour='blue', linetype = 2)
+```
+
+This plot shows the distribution of the liquidity over 5-min intervals. We can 
+see that the mode is in the first bin, between 0 and 200. This is likely to be 
+due to the fact that many of these 5-min interval happen at times when the 
+market is open but there is little activity. The vertical line in the middle 
+represents the median of the distribution, while the dashed lines represent 
+respectively the 10th, 25th, 75th and 90th centile.
+
+```{r echo=FALSE, warning=FALSE}
+upper_bound <- quantile(diffs$hundreds_totalv, .99)
+
+ggplot(aes(x = hundreds_totalv),
+      data = diffs,
+      xlab = 'change in volume',
+      ylab = 'frequency of change in volume') +
+  scale_x_continuous(breaks = seq(0, upper_bound, 500),
+                     limits = c(0, upper_bound)) +
+  geom_histogram(colour = 'black', 
+                 fill = 'turquoise',
+                 binwidth = 200) +
+  geom_vline(xintercept = median(diffs$totalv), colour='blue') +
+  geom_vline(xintercept = quantile(diffs$totalv, .1),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .25),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .75),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .9),
+             colour='blue', linetype = 2)
+```
+
+This plot shows the distribution of the subset of the liquidity where the 
+trade size was larger than 99 contracts over 5-min intervals. It may appear 
+reasonable for the data to have this shape because - as we pointed out earlier - 
+these are the trades made by large traders. Since it takes a lot of financial 
+capacity to make these trades, it appears reasonable that the most frequent 
+observations are the lowest and the least frequent ones are the highest.
+Like the previous plot, the vertical line in the middle represents the median of
+the distribution, while the dashed lines represent respectively the 10th, 25th, 
+75th and 90th centile.
+
+```{r echo=FALSE, warning=FALSE}
+upper_bound <- quantile(diffs$mid, .995)
+lower_bound <- quantile(diffs$mid, .005)
+
+ggplot(aes(x = mid),
+      data = diffs,
+      xlab = 'change in price',
+      ylab = 'frequency of change in price') +
+  scale_x_continuous(breaks = round(seq(lower_bound, upper_bound, .02), 2),
+                     limits = c(lower_bound, upper_bound)) +
+  geom_histogram(colour = 'black', 
+                 fill = 'orange',
+                 binwidth = .01) +
+  geom_vline(xintercept = median(diffs$mid), colour='blue') +
+  geom_vline(xintercept = quantile(diffs$mid, .1),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$mid, .25),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$mid, .75),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$mid, .9),
+             colour='blue', linetype = 2)
+```
+
+This plot shows the distribution of price movements over 5-minute intervals. 
+In this case, we are not looking at the asbolute value because we interested in
+seeing there is any skew in the  distribution. From this plot, we can see that 
+the distribution appears quite symmetrical to the naked eye, so that it seems 
+appropriate to infer that there are approximately as many positive and negative 
+prices changes. This also appears to legimitize the choice of looking at the
+absolute value of changes in price, since taking the sign away does not appear 
+to cause a substantial loss of information.
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+
+```{r echo=FALSE}
+str(data[complete.cases(data),])
+str(diffs)
+```
+
+There are 51787 timestamps in the dataset with 9 features. We then created a 
+diffs dataframe containing the differentials of price and volume, as well as the 
+time of the day of day of the week. This will enable us to group the data points
+by weekday and time of day and do some deeper investigation. Additional details 
+about the single variables can be found below each plot.
+
+### What is/are the main feature(s) of interest in your dataset?
+
+The main features of interest are the price differentials and the volume. The 
+price differentials matter in that they provide an idea of the volatility of the
+price. The volume matters in that it provides an idea of how liquid the market 
+is. Both are important when it comes to taking trading decisions.
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+
+Day of week and time of day are very important because there are some time 
+spans over the day when the market is more liquid and volatile due to the fact 
+that exchanges other than EUREX are open at certain specific times. This is 
+quite likely to have an impact on how the price moves.
+
+### Did you create any new variables from existing variables in the dataset?
+
+Yes, I created the mid price variable, which is the average of the bid price
+and the ask price. As we pointed out earlier, brokers very often keep a spread 
+between the price offered to buyers and the price offered to sellers. In the 
+overwhelming majority of the cases, in the case of Euro-Bund futures this spread
+is .01. The mid price isn't actually available to the public but it is a 
+reasonable to measure price changes.
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+
+Yes, the distribution of the volume (totalv) looks quite unsual. The first bin
+from the left is the mode of the distribution, then the count slowly decreases
+to one first valley around the 10th, it does a local peak around the median and 
+then progressively decreases until it fades. It might be interesting to 
+explore the shape of the distribution across the hour of the day. Without 
+seeing the distribution by hour of day, one might suspect that all those many 
+points contituting the mode of the distribution happen in those hours when 
+London and other European markets are closed.
+
+# Bivariate Plots Section
+
+```{r  echo=FALSE, warning=FALSE, fig.height=6.5}
+upper_bound <- quantile(diffs$totalv, .99)
+diffs$hour <- rownames(diffs)
+diffs$hour <- strftime(diffs$hour, format='%H:00')
+
+ggplot(aes(x = totalv),
+      data = diffs,
+      xlab = 'change in volume',
+      ylab = 'frequency of change in volume') +
+  scale_x_continuous(#breaks = seq(0, upper_bound, 2000),
+                     limits = c(0, upper_bound)) +
+  geom_histogram(colour = 'black', 
+                 fill = 'pink',
+                 binwidth = 200) +
+  geom_vline(xintercept = median(diffs$totalv), colour='blue') +
+  geom_vline(xintercept = quantile(diffs$totalv, .1),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .25),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .75),
+             colour='blue', linetype = 2) +
+  geom_vline(xintercept = quantile(diffs$totalv, .9),
+             colour='blue', linetype = 2) +
+  facet_wrap(~hour, ncol = 3)
+```
+
+This plot aims at verifying the hypothesis we considered in the paragraph 
+above. It shows the distribution of volume (totalv) by hour of day. The vertical 
+line in the middle represents the median of the distribution, while the dashed
+lines represent respectively the 10th, 25th, 75th and 90th centile. It is 
+important to clarify that the centiles refer to the plot of the overall unsplit 
+distribution. Its purpose is to make how the distribution of each hour is 
+similar or different than the general one. Indeed this plot confirms the 
+hypothesis we confirmed in the last paragraph: after 18, the distribution 
+becomes very positively skewed and it such a way that it affects the overall 
+distribution.
+
+```{r echo=FALSE, warning=FALSE}
+diffs$time <- rownames(diffs)
+diffs$time <- as.POSIXct(strftime(diffs$time,
+                                  format="%H:%M:%S"),
+                         format="%H:%M:%S")
+
+upper_bound <- quantile(diffs$totalv, .99)
+  
+ggplot(aes(x = time, y = totalv),
+       data = diffs) +
+  geom_jitter(alpha = .1,
+              color = 'pink') +
+  coord_cartesian(ylim = c(0, upper_bound)) +
+  scale_y_continuous(breaks = seq(0, upper_bound, 1000)) +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .1),
+            linetype = 2, color = 'blue') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .5),
+            color = 'blue') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .9),
+            linetype = 2, color = 'blue')
+```
+
+This scatterplot shows the liquidity by hour of day. The dashed lines
+represent respectively the 10th and the 90th centile, while the line in the 
+middle represent the median by hour. From here we can see a reasonable pattern:
+
+- a peak at the opening of the London Stock Exchange and the majority of other 
+European exchanges at 9:00 CET
+- a progressive decrease until European lunch-time
+- another peak at 14:30 and 15:30, i.e. one hour before the opening of the New 
+York Stock Exchange and at its open
+- a final peak at 17:30, when the London Stock Exchange and the majority of 
+other European exchanges close and intraday traders need to close their intraday
+positions.
+
+```{r echo=FALSE, warning=FALSE}
+upper_bound <- quantile(abs(diffs$mid), .99)
+  
+ggplot(aes(x = time, y = abs(mid)),
+       data = diffs) +
+  geom_jitter(alpha = .1,
+              color = 'orange') +
+  coord_cartesian(ylim = c(0, upper_bound)) +
+  scale_y_continuous(breaks = seq(0, upper_bound, .01),
+                     limits = c(0, upper_bound)) +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .1),
+            linetype = 2, color = 'blue') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .5),
+            color = 'blue') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .9),
+            linetype = 2, color = 'blue')
+```
+
+This plot represents the price changes every 5 minutes in absolute terms, i.e.
+irrespective of their direction. It measures the volatility of the price over 
+5-minute intervals.
+
+We can see a few spikes:
+
+- at the opening of the EUREX Exchange at 8:00 CET
+- at the opening of the London Stock Exchange and the majority of other European
+exchanges at 9:00 CET, until 10:00
+- between 14:30 and 15:00, i.e. one hour before the opening of the New York
+Stock Exchange 
+- between 15:30 and 17:30, i.e. during the morning session of the New York
+Stock Exchange
+
+We can also see a clear decrease in volatility after 17:30, when the London 
+Stock Exchange and most European markets close.
+
+Given price changes are expressed in absolute terms, of course there is a 
+lower bound at zero. The median is at 0.02 most of the time, with a few spikes 
+at 0.03 and 0.04 in the time ranges mentioned above and then it goes to 0.01
+after London and other European markets close. It is interesting to notice 
+approximately 90% of the price moves are below 0.07, yet approximately 1 in 10
+moves is above that threshold, with some very significant outliers not appearing
+in this plot only for the sake of better readability.
+
+```{r echo=FALSE}
+cat('Correlation between liquidity and volatility: ')
+cat(cor(diffs$totalv, abs(diffs$mid)))
+```
+
+```{r echo=FALSE, warning=FALSE}
+upper_bound_totalv <- quantile(diffs$totalv, .99)
+upper_bound_absmid <- quantile(abs(diffs$mid), .99)
+
+ggplot(aes(x = totalv, y = abs(mid)), data = diffs) +
+  geom_jitter(alpha = 0.2, color = 'turquoise') +
+  scale_x_continuous(breaks = seq(0, upper_bound_totalv, 2000),
+                     limits = c(0, upper_bound_totalv)) +
+  scale_y_continuous(breaks = seq(0, upper_bound_absmid, .01),
+                     limits = c(0, upper_bound_absmid))
+```
+
+We may argue there might be a slight correlation between liquidity (totalv) 
+and volatility (abs(mid)), as we can see that when liquidity becomes high it is 
+rarer too observe low volatility and when volatility becomes high it is rarer 
+too observe low liquidity. As a result, the shape of our jitter plot has a 
+diagonal tendency, but we may arguably find it a little bit too foggy to 
+confidently believe in a reliable correlation as there are too many cases 
+liquidity is relatively high and volatility is relatively low and viceversa.
+
+```{r echo=FALSE}
+
+diffs$weekday <- weekdays(as.Date(rownames(diffs)))
+diffs$weekday <- factor(diffs$weekday)
+diffs$weekday <- factor(diffs$weekday,levels(diffs$weekday)[c(2, 4, 5, 3, 1)])
+
+diffs$direction[diffs$mid > 0] <- 'up' 
+diffs$direction[diffs$mid < 0] <- 'down' 
+diffs$direction[diffs$mid == 0] <- NA 
+diffs$direction <- as.factor(diffs$direction)
+diffs$direction <- factor(diffs$direction,levels(diffs$direction)[c(2, 1)])
+
+
+absmid_median_by_weekday <- diffs %>%
+  group_by(weekday) %>%
+  summarise(absmid_median = median(abs(mid)),
+            absmid_75th_centile = quantile(abs(mid), .75),
+            absmid_90th_centile = quantile(abs(mid), .9)) %>%
+  arrange(weekday)
+
+absmid_median_by_weekday
+```
+
+
+```{r echo=FALSE}
+ggplot(aes(x = weekday, y = abs(mid)),
+       data = subset(diffs, !is.na(weekday))) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, upper_bound_absmid)) +
+  scale_y_continuous(breaks = seq(0, upper_bound_absmid, 0.01))
+```
+
+This boxplot shows the 5-min volatility by weekday:
+
+- Of course, given we express it in absolute terms, the min is at zero for all
+days
+- The 25th centile is at .01 for all days
+- The median is at .02 for all days expect Monday, slightly lower al .015
+- The 75th centile is at .03 for all days expect Thursday, which is the most 
+volatile day at .04
+- The 90th centile is at .05 from Monday to Wednesday and .06 on Thursday and
+Friday.
+
+It is interesting to notice that Friday's 90th centile is at .06 like 
+Thursday's while its 75th is at .03 like Monday to Wednesday's. This may suggest
+lower volatility in the more usual case but higher in the lower part of the 
+extremes.
+
+It is also interesting to notice 1 in 100 observations is above .12 and can go
+as far as .95, which is a quite wild move for a 5-minute interval. This means 
+that - on average - every hundred 5-min intervals, we have one swing ranging 
+between .12 and .95. One in hundred 5-min intervals means one every 500 minutes,
+i.e. one every 8.33 hours approximately. Given the EUREX Exchange is open 14 
+hours per day (from 8 to 22), this suggests we may expect these moves 1.7 times
+per day. This might arguably appear to be too frequent to be ignored.
+
+```{r echo=FALSE}
+mid_outliers <- subset(diffs, abs(mid) > upper_bound_absmid)
+
+ggplot(aes(x = as.POSIXct(rownames(mid_outliers)), y = mid, color = direction),
+       data = mid_outliers) +
+  geom_point() +
+  scale_y_continuous(breaks = seq(-1, 1, .1)) +
+  scale_x_datetime(date_breaks = '1 month',
+                   date_labels = '%b') +
+  scale_color_manual(values=c('yellowgreen', 'tomato')) +
+  xlab('date')
+```
+
+This plot represents only those points whose absolute mid value was above the
+99th centile, i.e. all those points we did not consider in the boxplot showing 
+the 5-min volatility by weekday. As much as we consider that choice legitimate 
+for the sake of its specific purpose, it appears worth noting - as we suspected 
+above and as it is confirmed by this plot - these points appear too frequent to 
+be ignored. By watching this plot to the naked eye, one might be tempted to set
+the threshold above .25 and below -.25 in order to consider these points true 
+outliers.
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x = as.POSIXct(rownames(diffs)), y = mid, color = direction),
+       data = diffs) +
+  geom_point(alpha = .1, show.legend = F) +
+  scale_y_continuous(breaks = seq(-1, 1, .1)) +
+  scale_x_datetime(date_breaks = '1 month',
+                   date_labels = '%b') +
+  scale_color_manual(values=c('yellowgreen', 'tomato')) +
+  xlab('date')
+```
+
+Yet, for the sake of keeping correct perspective, it is also useful to keep in
+mind that the bulk of observations is within -.1 and .1, as it is shown by this 
+plot of all observations with an alpha of .1.
+
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+
+We have uncovered a few time-related patterns that we discussed into greater 
+depth below each single plot for the sake of greater immediate clarity.
+
+### Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+
+No, not really.
+
+### What was the strongest relationship you found?
+
+We did not find any particular strong relationship, but rather uncovered a few 
+time-related patterns.
+
+# Multivariate Plots Section
+
+```{r echo=FALSE, warning=FALSE}
+totalv_median_by_weekday <- diffs %>%
+  group_by(weekday) %>%
+  summarise(totalv_25th_centile = quantile(totalv, .25),
+            totalv_median = median(totalv),
+            totalv_75th_centile = quantile(totalv, .75),
+            totalv_90th_centile = quantile(totalv, .9)) %>%
+  arrange(weekday)
+
+totalv_median_by_weekday
+```
+
+
+```{r echo=FALSE, warning=FALSE, Bivariate_Plots}
+ggplot(aes(x = weekday, y = totalv),
+       data = subset(diffs, !is.na(weekday))) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, upper_bound_totalv)) +
+  scale_y_continuous(breaks = seq(0, upper_bound_totalv, 1000)) +
+  # I would like to plot a dashed line through the median and the 90th centile
+  # of the totalv of each day. How can I do that?
+  geom_line(stat = 'summary',
+            fun.y = quantile,
+            fun.args = list(probs = .5),
+            color = 'blue')
+```
+
+This plot shows that we have an upward trend in liquidity from Monday to 
+Thursday and then it subsides on Friday. The median volume of each day is
+respectively 2463, 3098, 3259, 3414, 2882.
+
+```{r warning=FALSE, echo=FALSE, fig.height = 5.5, fig.width = 10}
+ggplot(aes(x = time,
+           y = abs(mid),
+           colour = direction),
+       data = subset(diffs, !is.na(diffs$direction))) +
+  scale_color_manual(values=c('yellowgreen', 'tomato')) +
+  geom_jitter(alpha = .1,
+              show.legend = F) +
+  coord_cartesian(ylim = c(0, upper_bound_absmid)) +
+  scale_y_continuous(breaks = seq(0, upper_bound_absmid, .01),
+                     limits = c(0, upper_bound_absmid)) +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .5),
+            color = 'blue') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .9),
+            linetype = 2, color = 'blue') +
+  facet_wrap(~direction, ncol = 1)
+```
+
+This plot represents the price changes every 5 minutes in absolute terms, i.e.
+irrespective of their direction, by direction of price movement, 'up' when the 
+change in price is positive and 'down' when it is negative. The behavior appears 
+to be quite similar. There are a few differences here and there but they appear 
+to be negligible. This seems to confirm the symmetrical distribution of price 
+changes that we observed earlier.
+
+```{r echo=FALSE, warning=FALSE, fig1, fig.height = 15, fig.width = 10}
+ggplot(aes(x = time,
+           y = abs(mid),
+           colour = direction),
+       data = subset(diffs, !is.na(diffs$direction))) +
+  scale_color_manual(values=c('yellowgreen', 'tomato')) +
+  geom_jitter(alpha = .1,
+              show.legend = F) +
+  coord_cartesian(ylim = c(0, upper_bound_absmid)) +
+  scale_y_continuous(breaks = seq(0, upper_bound_absmid, .01),
+                     limits = c(0, upper_bound_absmid)) +
+  scale_x_datetime(date_breaks = '2 hours',
+                   date_labels = '%H:%M') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .5),
+            color = 'blue') +
+  geom_line(stat = 'summary', fun.y = quantile, fun.args = list(probs = .9),
+            linetype = 2, color = 'blue') +
+  facet_wrap(weekday~direction, ncol = 2)
+```
+
+This is the same plot as above but with an additional split by day of week. We
+can see that here and there it is possible to notice a few differences on a 
+day-by-day, yet it is not very intuitive to spot them.
+
+```{r echo=FALSE}
+absmid_by_time_and_weekday_long <-
+  diffs %>%
+  group_by(time, weekday) %>%
+  summarise(median_absmid=median(abs(mid)))
+
+cat('Summary of median change in price by hour of day and day of week:\n\n')
+summary(absmid_by_time_and_weekday_long$median_absmid)
+```
+
+```{r echo=FALSE}
+absmid_by_time_and_weekday_wide <- acast(absmid_by_time_and_weekday_long, 
+                                         time~weekday, 
+                                         value.var='median_absmid')
+
+rownames(absmid_by_time_and_weekday_wide) <- 
+  strftime(as.POSIXct(rownames(absmid_by_time_and_weekday_wide)), '%H:%M')
+
+
+plot_ly(x = colnames(absmid_by_time_and_weekday_wide),
+        y = rownames(absmid_by_time_and_weekday_wide),
+        z = absmid_by_time_and_weekday_wide) %>%
+  add_surface(colors = c('steelblue4', 'white', 'red4'))
+```
+
+This 3D surface aims at uncovering patterns in a more intuitive way. It shows 
+the median volatility of the price as a function of day of week and time of day.
+It is red when volatility is high (or metaphorically hot) and blue when it is 
+low (or metaphorically cold).
+
+```{r  echo=FALSE, fig.height = 3, fig.width = 10}
+ggplot(data = absmid_by_time_and_weekday_long, 
+       aes(x = time, y = weekday)) +
+  geom_tile(aes(fill = median_absmid)) +
+  scale_fill_gradient2(low = "steelblue4", 
+                       mid = "white",
+                       high = "red4",
+                       midpoint = median(
+                         absmid_by_time_and_weekday_long$median_absmid))  +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M')
+```
+
+This heatmap aims at showing the same as above, but it seems to us that it
+shows outcome in a even more visually clear way.
+
+```{r echo=FALSE}
+totalv_by_time_and_weekday_long <-
+  diffs %>%
+  group_by(time, weekday) %>%
+  summarise(median_volume=median(totalv))
+
+cat('Summary of median change in volume by hour of day and day of week:\n\n')
+summary(totalv_by_time_and_weekday_long$median_volume)
+```
+
+```{r echo=FALSE}
+totalv_by_time_and_weekday_wide <- acast(totalv_by_time_and_weekday_long, 
+                                         time~weekday, 
+                                         value.var='median_volume')
+
+rownames(totalv_by_time_and_weekday_wide) <- 
+  strftime(as.POSIXct(rownames(totalv_by_time_and_weekday_wide)), '%H:%M')
+
+plot_ly(x = colnames(totalv_by_time_and_weekday_wide),
+        y = rownames(totalv_by_time_and_weekday_wide),
+        z = totalv_by_time_and_weekday_wide) %>%
+  add_surface(colors = c('steelblue4', 'white', 'red4'))
+```
+
+This 3D surface shows the median liquidity a function of day of week and time
+of day. Again, it is red when volatility is high (or metaphorically hot) and
+blue when it is low (or metaphorically cold).
+
+```{r echo=FALSE,fig.height = 3, fig.width = 10}
+ggplot(data = totalv_by_time_and_weekday_long, 
+       aes(x = time, y = weekday)) +
+  geom_tile(aes(fill = median_volume)) +
+  scale_fill_gradient2(low = 'steelblue4', 
+                       mid = 'white',
+                       high = 'red4',
+                       midpoint = median(
+                         totalv_by_time_and_weekday_long$median_volume))  +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M')
+```
+
+This heatmap aims at showing the same as above, but it seems to us that it
+shows outcome in a even more visually clear way.
+
+```{r echo=FALSE}
+diffs$larger_traders <- with(diffs, hundreds_totalv / totalv)
+
+larger_traders_by_time_and_weekday_long <-
+  diffs %>%
+  group_by(time, weekday) %>%
+  summarise(median_pct=median(larger_traders))
+
+larger_traders_by_time_and_weekday_long[
+  is.na(larger_traders_by_time_and_weekday_long)] <- 0
+
+cat('Summary of median proportion of large trades vs overall volume
+by hour of day and day of week:\n\n')
+
+summary(larger_traders_by_time_and_weekday_long$median_pct)
+```
+
+```{r echo=FALSE}
+larger_traders_by_time_and_weekday_wide <- 
+  acast(larger_traders_by_time_and_weekday_long, 
+        time~weekday, 
+        value.var='median_pct')
+
+rownames(larger_traders_by_time_and_weekday_wide) <- 
+  strftime(as.POSIXct(rownames(larger_traders_by_time_and_weekday_wide)), 
+           '%H:%M')
+
+plot_ly(x = colnames(larger_traders_by_time_and_weekday_wide),
+        y = rownames(larger_traders_by_time_and_weekday_wide),
+        z = larger_traders_by_time_and_weekday_wide) %>%
+  add_surface(colors = c('steelblue4', 'white', 'red4'))
+```
+
+
+
+```{r echo=FALSE, fig.height = 3, fig.width = 10}
+ggplot(data = larger_traders_by_time_and_weekday_long,
+       aes(x = time, y = weekday)) +
+  geom_tile(aes(fill = median_pct)) +
+  scale_fill_gradient2(low = 'steelblue4', 
+                       mid = 'white',
+                       high = 'red4', 
+                       midpoint = median(
+                         larger_traders_by_time_and_weekday_long$median_pct)) +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M')
+```
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+
+We saw that usually there is very little liquidity before 9:00 and after 17:30, 
+relatively high liquidity in the morning from 9:00 to 12:00 and highest
+liquidity between 14:30 and 17:30, when both European and US markets are open 
+and active.
+
+### Were there any interesting or surprising interactions between features?
+
+What appeared quite interesting to us is the fact that between 8:00 and 9:00 
+the volatility is high and the liquidity is low. This implies it might be risky 
+to trade in that environment because if a trade goes against the direction of 
+the trader, given the low liquidity it might be harder to find a counterpart at 
+the desired exit price, thus causing to potentially exit a trade at a bad price.
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, fig.height = 3, fig.width = 10, echo=FALSE, Plot_One}
+ggplot(data = absmid_by_time_and_weekday_long, 
+       aes(x = time, y = weekday)) +
+  geom_tile(aes(fill = median_absmid)) +
+  scale_fill_gradient2(low = 'steelblue4', 
+                       mid = 'white',
+                       high = 'red4',
+                       midpoint = median(
+                         absmid_by_time_and_weekday_long$median_absmid))  +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M')
+```
+
+### Description One
+
+This heatmap shows the median volatility of the price as a function of day of 
+week and time of day. It is red when volatility is high (or metaphorically hot) 
+and blue when it is low (or metaphorically cold). It is precious to know the 
+usual level of volatility for a trader because some volatility is useful to find 
+profitable trading opportunities, yet too much of it may cause unexpected large 
+losses, which might take a relatively long time to be recovered. We can see 
+there are some moments when there are extreme peaks that one might choose to
+either ride or avoid, based on their trading models' ability to detect an
+accurate signal. In particular, we can notice some volatility peaks when the 
+week begins on Monday morning at 8, on Tuesdays at 9 and on Fridays around 
+14:30.
+
+### Plot Two
+```{r echo=FALSE, fig.height = 3, fig.width = 10, echo=FALSE, Plot_Two}
+ggplot(data = totalv_by_time_and_weekday_long, 
+       aes(x = time, y = weekday)) +
+  geom_tile(aes(fill = median_volume)) +
+  scale_fill_gradient2(low = 'steelblue4', 
+                       mid = 'white',
+                       high = 'red4',
+                       midpoint = median(
+                         totalv_by_time_and_weekday_long$median_volume))  +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M')
+```
+
+### Description Two
+
+This heatmap shows the median liquidity as a function of day of week and time 
+of day. It is red when liquidity is high (or metaphorically hot) and blue when 
+it is low (or metaphorically cold). It is precious to know the usual level of 
+liquidity for a trader because it is needed in order to find a counterpart at 
+the desired exit price. From this plot we can see that there is very little 
+liquidity before 8:00, barely any after 18:00, and some extreme peaks on 
+Wednesdays around 11:30, on Fridays around 14:30 and from Tuesday to Thursday
+around 17:15.
+
+### Plot Three
+```{r echo=FALSE, fig.height = 3, fig.width = 10, echo=FALSE, Plot_Three}
+ggplot(data = larger_traders_by_time_and_weekday_long,
+       aes(x = time, y = weekday)) +
+  geom_tile(aes(fill = median_pct)) +
+  scale_fill_gradient2(low = 'steelblue4', 
+                       mid = 'white',
+                       high = 'red4', 
+                       midpoint = median(
+                         larger_traders_by_time_and_weekday_long$median_pct)) +
+  scale_x_datetime(date_breaks = '1 hour',
+                   date_labels = '%H:%M')
+```
+
+
+### Description Three
+
+This heatmap shows the median proportion of liquidity due to trades larger 
+than 100 contracts over total liquidity, as a function of day of week and time 
+of day. It is red when it is high (or metaphorically hot) and blue when it is
+low (or metaphorically cold). It is precious to know the usual level of 
+such proportion for a trader because it shows the presence of large players in
+the market over some time span. A trader might suspect that their model is more 
+robust if it usually trades in those times when large players are in the game.
+
+------
+
+# Reflection
+
+The thing that required most attention was clarifying what I wanted to do. I 
+noticed that until I have not well clarified what I want to visualize, any
+attempt is a struggle. On the other hand, after careful reflection of what it is
+that we want to see, it becomes much easier to obtain it. In particular, the 
+heatmaps required some thought in order to clarify that for each (time, weekday)
+couple we needed to reduce all the points their median and use the long or wide
+form based on whether we were using plotly's 3D surface or ggplot2's heatmap.
+
+What was surprising to me what how clearly the patterns of liquidity and 
+volatility emerged and how clear this difference is when some markets are open 
+or not. In particular, we have seen that despite the fact that the EUREX 
+Exchange is open between 8:00 and 22:00, most of the activity in terms of 
+liquidity and volatility happens between 9:00 and 17:30, i.e. the times when the
+London Stock Exchange is open. It was interesting to notice that activity fades 
+after 17:30 despite the fact that the New York Stock Exchange is open until 
+22:00 CET.
+
+Further exploration of the data might include doing the same heatmaps only 
+between 9:00 and 17:30, i.e. only when the London Stock Exchange and most other
+European exchanges are open, under the assumption that the 'real' trading day is
+between 9:00 and 17:30. Therefore, it may be interesting to re-assess what is
+high, medium or low level of liquidity, volatility or other features in that 
+subset of the data which is constituted by what we have arguably named the 
+'real' trading day. Moreover, a trader might want to do a heatmap of the 
+performance of their model as a function of time of day and day of week and 
+compare it to the heatmaps of liquidity, volatility and other features, in order
+to obtain a visual intuition of whether its model performs better or worse when 
+the features have take a certain value range.
